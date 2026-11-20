@@ -125,3 +125,7 @@ exclude:
 plugins:
   - jekyll-paginate
   - jekyll-sitemap
+
+navbar-links:
+  About Me: "aboutme"
+  浮游植物识别: "demo"
