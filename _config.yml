@@ -7,17 +7,17 @@
 ############################
 
 # 网站名称（显示在首页大标题）
-title: 网页demo
+title: 八种浮游藻类识别
 
 # 你的名字（显示在页脚）
-author: 吴
+author: HW
 
 ###############################################
 # --- 导航栏链接 --- #
 ###############################################
 
 navbar-links:
-  About Me: "aboutme"
+  About Me: "aboutus"
 
 ################
 # --- 头像 --- #
@@ -32,12 +32,12 @@ round-avatar: true
 #####################################
 
 social-network-links:
-  email: "你的邮箱@example.com"
+  email: "2115026035@qq.com"
   rss: true
   github: 2115026035
 
 # RSS 订阅源的描述
-rss-description: 记录我的学习与生活
+rss-description: 记录我的学习
 
 ###########################
 # --- 通用选项 --- #
@@ -127,5 +127,5 @@ plugins:
   - jekyll-sitemap
 
 navbar-links:
-  About Me: "aboutme"
+  About Me: "aboutus"
   浮游植物识别: "demo"
