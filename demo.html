@@ -4,45 +4,65 @@ title: 浮游植物识别
 ---
 
 <p id="status">准备中…</p>
-<input type="file" id="file" accept="image/*">
+<p id="info" style="font-size:13px;color:#777"></p>
+
+<p>
+  <input type="file" id="file" accept="image/*">
+  <button id="selftest" style="margin-left:10px;padding:4px 12px">自检（不用选图）</button>
+</p>
+
 <div id="out" style="margin-top:1em"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/ort.min.js"></script>
 <script>
 const MODEL_URL  = '/assets/models/best.onnx';
-const SIZE       = 640;      // 与 ONNX 输入一致，别改
+const SIZE       = 640;
 const CONF_THRES = 0.25;
 const IOU_THRES  = 0.45;
 
 const CLASS_NAMES = [
-  'Chaetoceros',      // 0 角毛藻
-  'Pennate_Diatom',   // 1 羽纹硅藻
-  'Coscinodiscus',    // 2 圆筛藻
-  'Thalassiosira',    // 3 海链藻
-  'Ceratium',         // 4 角甲藻
-  'Prorocentrum',     // 5 原甲藻
-  'Haptophyta',       // 6 定鞭金藻
-  'Guinardia'         // 7 几内亚藻
+  'Chaetoceros', 'Pennate_Diatom', 'Coscinodiscus', 'Thalassiosira',
+  'Ceratium', 'Prorocentrum', 'Haptophyta', 'Guinardia'
 ];
 
 let session = null;
 const statusEl = document.getElementById('status');
+const infoEl   = document.getElementById('info');
+
+function fail(stage, e) {
+  const msg = (e && (e.message || e.toString())) || String(e);
+  statusEl.textContent = '【' + stage + '失败】' + msg;
+  console.error(stage, e);
+}
 
 (async () => {
-  ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/';
-  ort.env.wasm.numThreads = 1;
-  statusEl.textContent = '正在加载模型（11.7MB，首次较慢）…';
   try {
+    ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/';
+    ort.env.wasm.numThreads = 1;
+    statusEl.textContent = '正在加载模型（11.7MB，首次较慢）…';
     session = await ort.InferenceSession.create(MODEL_URL, {
-      executionProviders: ['webgl', 'wasm']
+      executionProviders: ['wasm']
     });
+    infoEl.textContent = '输入: ' + session.inputNames.join(', ') +
+                         ' ｜ 输出: ' + session.outputNames.join(', ');
     statusEl.textContent = '模型已就绪，请选择图片';
   } catch (e) {
-    statusEl.textContent = '模型加载失败：' + e.message;
+    fail('模型加载', e);
   }
 })();
 
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload  = () => { img._url = url; resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('浏览器无法解码这张图片')); };
+    img.src = url;
+  });
+}
+
 function letterbox(img) {
+  if (!img.width || !img.height) throw new Error('图片宽高为 0');
   const scale = Math.min(SIZE / img.width, SIZE / img.height);
   const nw = Math.round(img.width * scale);
   const nh = Math.round(img.height * scale);
@@ -52,6 +72,7 @@ function letterbox(img) {
   const c = document.createElement('canvas');
   c.width = SIZE; c.height = SIZE;
   const ctx = c.getContext('2d');
+  if (!ctx) throw new Error('无法创建 canvas 上下文');
   ctx.fillStyle = '#727272';
   ctx.fillRect(0, 0, SIZE, SIZE);
   ctx.drawImage(img, padX, padY, nw, nh);
@@ -63,7 +84,10 @@ function letterbox(img) {
     f[SIZE * SIZE + i]     = px[i * 4 + 1] / 255;
     f[2 * SIZE * SIZE + i] = px[i * 4 + 2] / 255;
   }
-  return { tensor: new ort.Tensor('float32', f, [1, 3, SIZE, SIZE]), scale, padX, padY };
+  return {
+    tensor: new ort.Tensor('float32', f, [1, 3, SIZE, SIZE]),
+    scale, padX, padY
+  };
 }
 
 function iou(a, b) {
@@ -71,35 +95,48 @@ function iou(a, b) {
   const x2 = Math.min(a.x2, b.x2), y2 = Math.min(a.y2, b.y2);
   const w = Math.max(0, x2 - x1), h = Math.max(0, y2 - y1);
   const inter = w * h;
-  const uni = (a.x2 - a.x1) * (a.y2 - a.y1) + (b.x2 - b.x1) * (b.y2 - b.y1) - inter;
+  const uni = (a.x2 - a.x1) * (a.y2 - a.y1)
+            + (b.x2 - b.x1) * (b.y2 - b.y1) - inter;
   return inter / (uni + 1e-9);
 }
 
 function nms(boxes) {
   boxes.sort((a, b) => b.score - a.score);
   const keep = [];
-  const pool = boxes.slice();
-  while (pool.length) {
-    const cur = pool.shift();
+  while (boxes.length) {
+    const cur = boxes.shift();
     keep.push(cur);
-    for (let i = pool.length - 1; i >= 0; i--) {
-      if (pool[i].cls === cur.cls && iou(cur, pool[i]) > IOU_THRES) pool.splice(i, 1);
+    for (let i = boxes.length - 1; i >= 0; i--) {
+      if (boxes[i].cls === cur.cls && iou(cur, boxes[i]) > IOU_THRES) boxes.splice(i, 1);
     }
   }
   return keep;
 }
 
 async function detect(img) {
-  const { tensor, scale, padX, padY } = letterbox(img);
-  const feeds = {};
-  feeds[session.inputNames[0]] = tensor;
-  const out = await session.run(feeds);
+  let t;
+  try {
+    t = letterbox(img);
+  } catch (e) {
+    throw new Error('预处理: ' + e.message);
+  }
+
+  let out;
+  try {
+    const feeds = {};
+    feeds[session.inputNames[0]] = t.tensor;
+    out = await session.run(feeds);
+  } catch (e) {
+    throw new Error('推理: ' + e.message);
+  }
 
   const o = out[session.outputNames[0]];
+  if (!o) throw new Error('推理: 输出张量为空');
+
   const d = o.data, dims = o.dims;
   const nc = dims[1] - 4, n = dims[2];
-
   const boxes = [];
+
   for (let i = 0; i < n; i++) {
     let best = 0, cls = -1;
     for (let c = 0; c < nc; c++) {
@@ -111,10 +148,10 @@ async function detect(img) {
     const cx = d[0 * n + i], cy = d[1 * n + i];
     const bw = d[2 * n + i], bh = d[3 * n + i];
     boxes.push({
-      x1: (cx - bw / 2 - padX) / scale,
-      y1: (cy - bh / 2 - padY) / scale,
-      x2: (cx + bw / 2 - padX) / scale,
-      y2: (cy + bh / 2 - padY) / scale,
+      x1: (cx - bw / 2 - t.padX) / t.scale,
+      y1: (cy - bh / 2 - t.padY) / t.scale,
+      x2: (cx + bw / 2 - t.padX) / t.scale,
+      y2: (cy + bh / 2 - t.padY) / t.scale,
       score: best, cls
     });
   }
@@ -124,6 +161,7 @@ async function detect(img) {
 function render(img, dets) {
   const wrap = document.getElementById('out');
   wrap.innerHTML = '';
+
   const canvas = document.createElement('canvas');
   canvas.width = img.width; canvas.height = img.height;
   canvas.style.maxWidth = '100%';
@@ -132,13 +170,14 @@ function render(img, dets) {
   const ctx = canvas.getContext('2d');
   ctx.drawImage(img, 0, 0);
   ctx.lineWidth = Math.max(2, img.width / 400);
-  ctx.font = `${Math.max(14, Math.round(img.width / 45))}px sans-serif`;
+  ctx.font = Math.max(14, Math.round(img.width / 45)) + 'px sans-serif';
 
   for (const b of dets) {
-    const name = CLASS_NAMES[b.cls] ?? ('class_' + b.cls);
+    const name = CLASS_NAMES[b.cls] || ('class_' + b.cls);
     ctx.strokeStyle = '#00e676';
     ctx.strokeRect(b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1);
-    const label = `${name} ${(b.score * 100).toFixed(0)}%`;
+
+    const label = name + ' ' + (b.score * 100).toFixed(0) + '%';
     const tw = ctx.measureText(label).width;
     ctx.fillStyle = 'rgba(0,230,118,0.9)';
     ctx.fillRect(b.x1, b.y1 - 22, tw + 10, 22);
@@ -148,28 +187,64 @@ function render(img, dets) {
 
   const list = document.createElement('div');
   list.style.marginTop = '1em';
-  list.textContent = dets.length
-    ? `识别到 ${dets.length} 个目标：` +
-      [...new Set(dets.map(b => CLASS_NAMES[b.cls] ?? ('class_' + b.cls)))].join('、')
-    : '没有识别到目标，试试降低 CONF_THRES';
+  if (dets.length) {
+    const names = [];
+    for (const b of dets) {
+      const nm = CLASS_NAMES[b.cls] || ('class_' + b.cls);
+      if (names.indexOf(nm) < 0) names.push(nm);
+    }
+    list.textContent = '检出 ' + dets.length + ' 个目标：' + names.join('、');
+  } else {
+    list.textContent = '没有检出目标，可尝试降低 CONF_THRES';
+  }
   wrap.appendChild(list);
 }
 
-document.getElementById('file').onchange = async (e) => {
-  const file = e.target.files[0];
-  if (!file || !session) return;
-  statusEl.textContent = '识别中…';
-  const img = new Image();
-  img.src = URL.createObjectURL(file);
-  await img.decode();
+document.getElementById('selftest').onclick = async () => {
+  if (!session) { statusEl.textContent = '【自检】模型还没加载好'; return; }
+  statusEl.textContent = '自检推理中…';
   try {
-    const dets = await detect(img);
-    render(img, dets);
-    statusEl.textContent = '完成';
-  } catch (err) {
-    statusEl.textContent = '推理失败：' + err.message;
-  } finally {
-    URL.revokeObjectURL(img.src);
+    const t = new ort.Tensor('float32', new Float32Array(3 * SIZE * SIZE), [1, 3, SIZE, SIZE]);
+    const feeds = {};
+    feeds[session.inputNames[0]] = t;
+    const o = await session.run(feeds);
+    const dims = o[session.outputNames[0]].dims;
+    statusEl.textContent = '【自检通过】输出维度 ' + dims.join(' × ');
+  } catch (e) {
+    fail('自检推理', e);
   }
+};
+
+document.getElementById('file').onchange = async (ev) => {
+  const file = ev.target.files[0];
+  if (!file) return;
+  if (!session) { statusEl.textContent = '模型还没加载好，稍等几秒再试'; return; }
+
+  statusEl.textContent = '读取图片…';
+  let img;
+  try {
+    img = await loadImage(file);
+  } catch (e) {
+    return fail('读取图片', e);
+  }
+
+  statusEl.textContent = '推理中…';
+  let dets;
+  try {
+    dets = await detect(img);
+  } catch (e) {
+    if (img._url) URL.revokeObjectURL(img._url);
+    return fail('推理', e);
+  }
+
+  try {
+    render(img, dets);
+  } catch (e) {
+    if (img._url) URL.revokeObjectURL(img._url);
+    return fail('绘制', e);
+  }
+
+  if (img._url) URL.revokeObjectURL(img._url);
+  statusEl.textContent = '完成，检出 ' + dets.length + ' 个目标';
 };
 </script>
